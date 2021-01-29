@@ -45,7 +45,7 @@ func newEventParser(binlogDump *BinlogDump) (parser *eventParser) {
 	parser.tableMap = make(map[uint64]*TableMapEvent)
 	parser.tableNameMap = make(map[string]uint64)
 	parser.tableSchemaMap = make(map[uint64]*tableStruct)
-	parser.eventDo = make([]bool, 36, 36)
+	parser.eventDo = make([]bool, 164, 164)
 	parser.ServerId = 21036
 	parser.connectionId = ""
 	parser.maxBinlogFileName = ""
@@ -210,7 +210,7 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 		if err != nil {
 			log.Println("row event err:", err)
 		}
-		if _, ok := parser.tableSchemaMap[rowsEvent.tableId]; ok {
+		if tableInfo, ok := parser.tableSchemaMap[rowsEvent.tableId]; ok {
 			event = &EventReslut{
 				Header:         rowsEvent.header,
 				BinlogFileName: parser.currentBinlogFileName,
@@ -218,7 +218,8 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 				SchemaName:     parser.lastMapEvent.schemaName,
 				TableName:      parser.lastMapEvent.tableName,
 				Rows:           rowsEvent.rows,
-				Pri:			parser.tableSchemaMap[rowsEvent.tableId].Pri,
+				Pri:			tableInfo.Pri,
+				ColumnMapping:  tableInfo.ColumnMapping,
 			}
 		} else {
 			event = &EventReslut{
@@ -246,7 +247,6 @@ func (parser *eventParser) parseEvent(data []byte) (event *EventReslut, filename
 			Rows:           nil,
 			Gtid:			parser.gtid,
 		}
-		log.Println("XID_EVENT:",event.Gtid)
 		break
 	default:
 		var genericEvent *GenericEvent
@@ -323,7 +323,7 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 	}
 	//set dbAndTable Name tableId
 	parser.tableNameMap[database+"."+tablename] = tableId
-	sql := "SELECT COLUMN_NAME,COLUMN_KEY,COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME,NUMERIC_SCALE,EXTRA,COLUMN_DEFAULT,DATA_TYPE,CHARACTER_OCTET_LENGTH FROM information_schema.columns WHERE table_schema='" + database + "' AND table_name='" + tablename + "' ORDER BY `ORDINAL_POSITION` ASC"
+	sql := "SELECT COLUMN_NAME,COLUMN_KEY,COLUMN_TYPE,CHARACTER_SET_NAME,COLLATION_NAME,NUMERIC_SCALE,EXTRA,COLUMN_DEFAULT,DATA_TYPE,CHARACTER_OCTET_LENGTH,IS_NULLABLE FROM information_schema.columns WHERE table_schema='" + database + "' AND table_name='" + tablename + "' ORDER BY `ORDINAL_POSITION` ASC"
 	stmt, err := parser.conn.Prepare(sql)
 	if err != nil {
 		errs = err
@@ -344,8 +344,9 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 		Pri:                  make([]string, 0),
 		ColumnSchemaTypeList: make([]*ColumnInfo, 0),
 	}
+	ColumnMapping := make(map[string]string,0)
 	for {
-		dest := make([]driver.Value, 10, 10)
+		dest := make([]driver.Value, 11, 11)
 		err := rows.Next(dest)
 		if err != nil {
 			break
@@ -360,6 +361,7 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 		var COLUMN_DEFAULT string
 		var DATA_TYPE string
 		var CHARACTER_OCTET_LENGTH uint64
+		var IS_NULLABLE string
 
 		COLUMN_NAME = dest[0].(string)
 		COLUMN_KEY = dest[1].(string)
@@ -438,6 +440,11 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 				CHARACTER_OCTET_LENGTH = 0
 			}
 		}
+		if dest[10] == nil {
+			IS_NULLABLE = "YES"
+		}else{
+			IS_NULLABLE = dest[10].(string)
+		}
 
 		tableInfo.ColumnSchemaTypeList = append(tableInfo.ColumnSchemaTypeList, &ColumnInfo{
 			COLUMN_NAME:            COLUMN_NAME,
@@ -460,11 +467,61 @@ func (parser *eventParser) GetTableSchemaByName(tableId uint64, database string,
 		if strings.ToUpper(COLUMN_KEY) == "PRI" {
 			tableInfo.Pri = append(tableInfo.Pri, COLUMN_NAME)
 		}
+
+		var columnMappingType string
+		switch DATA_TYPE {
+		case "tinyint":
+			if unsigned {
+				columnMappingType = "uint8"
+			} else {
+				if COLUMN_TYPE == "tinyint(1)" {
+					columnMappingType = "bool"
+				}else{
+					columnMappingType = "int8"
+				}
+			}
+		case "smallint":
+			if unsigned {
+				columnMappingType = "uint16"
+			} else {
+				columnMappingType = "int16"
+			}
+		case "mediumint":
+			if unsigned {
+				columnMappingType = "uint24"
+			} else {
+				columnMappingType = "int24"
+			}
+		case "int":
+			if unsigned {
+				columnMappingType = "uint32"
+			} else {
+				columnMappingType = "int32"
+			}
+		case "bigint":
+			if unsigned {
+				columnMappingType = "uint64"
+			} else {
+				columnMappingType = "int64"
+			}
+		case "numeric" :
+			columnMappingType = strings.Replace(COLUMN_TYPE,"numeric","decimal",1)
+		case "real" :
+			columnMappingType = strings.Replace(COLUMN_TYPE,"real","double",1)
+		default:
+			columnMappingType = COLUMN_TYPE
+			break
+		}
+		if IS_NULLABLE == "YES" {
+			columnMappingType = "Nullable("+columnMappingType+")"
+		}
+		ColumnMapping[COLUMN_NAME] = columnMappingType
 	}
 	if len(tableInfo.ColumnSchemaTypeList) == 0 {
 		return fmt.Errorf("column len is 0 " + "db:" + database + " table:" + tablename + " tableId:" + fmt.Sprint(tableId) + " may be no privilege")
 	}
 	tableInfo.needReload = false
+	tableInfo.ColumnMapping = ColumnMapping
 	parser.tableSchemaMap[tableId] = tableInfo
 	errs = nil
 	return
@@ -542,4 +599,13 @@ func (parser *eventParser) GetTableId(database string, tablename string) (uint64
 		return 0,fmt.Errorf("not found key:%s",key)
 	}
 	return parser.tableNameMap[key],nil
+}
+
+func (parser *eventParser) delTableId(database string, tablename string) {
+	key := database + "." + tablename
+	if tableId, ok := parser.tableNameMap[key]; ok {
+		delete(parser.tableSchemaMap, tableId)
+	}
+	delete(parser.tableNameMap, key)
+	return
 }

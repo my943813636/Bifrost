@@ -25,6 +25,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"runtime/debug"
 )
 
 type dbSaveInfo struct {
@@ -354,13 +355,21 @@ func recoveryData(data map[string]dbSaveInfo,isStop bool){
 						Status:				status,
 					}
 					if toServerObj.FileQueueStatus {
-						lastDataEvent,err := toServerObj.InitFileQueue(db.Name,schemaName,tableName).ReadLastFromFileQueue()
+						var lastDataEvent *pluginDriver.PluginDataType
+						var err error
+						func(){
+							if e := recover(); e != nil {
+								log.Printf("dbName:%s ;SchemaName:%s ; TableName:%s ; ReadLastFromFileQueue recovry:%s ; debug:%s",db.Name,schemaName,tableName,fmt.Sprint(e),string(debug.Stack()))
+								return
+							}
+							lastDataEvent,err = toServerObj.InitFileQueue(db.Name,schemaName,tableName).ReadLastFromFileQueue()
+						}()
 						if err != nil{
 							log.Fatal(fmt.Sprintf("dbName:%s ;SchemaName:%s ; TableName:%s ; ReadLastFromFileQueue Error:%s",db.Name,schemaName,tableName,err.Error()))
 						}
 						// 假如没有找到数据，或者文件队列里的最后一条数据，位点 对不上 ToServer里保存的数据，则认为数据是有异常的，则需要将 FileQueueStatus 修改为  false,清空文件队列数据
 						// 假如文件队列里最后一条数据和当前同步记录的进入 这个同步最后一个位点数据 相等，则不进行位点计算，随便其他 同步位点怎么来
-						if lastDataEvent == nil || lastDataEvent.BinlogFileNum != toServerObj.LastBinlogFileNum || lastDataEvent.BinlogPosition != toServerObj.LastBinlogPosition {
+						if lastDataEvent == nil || lastDataEvent.BinlogFileNum != toServerObj.LastQueueBinlog.BinlogFileNum || lastDataEvent.BinlogPosition != toServerObj.LastQueueBinlog.BinlogPosition {
 							toServerObj.FileQueueStatus = false
 						}
 					}
@@ -385,6 +394,7 @@ func recoveryData(data map[string]dbSaveInfo,isStop bool){
 								LastBinlog = LastBinlog0
 							}
 						}
+						// 因为判定当前这个同步的位点 是没有问题的，所以就不需要再参与最小位点计算，所以这里不需要和其他位点进行对比，取小值
 						continue
 					}else{
 						lastAllToServerNoraml = false
@@ -428,20 +438,17 @@ func recoveryData(data map[string]dbSaveInfo,isStop bool){
 			//假如key val存储中DB 的位点值存在 取大值
 			DBBinlog0 := CompareBinlogPositionAndReturnGreater(DBBinlog,DBLastBinlogPositionFromDB)
 			if DBBinlog0 == DBLastBinlogPositionFromDB {
-				log.Println("recovery binlog change4:",dbInfo.Name, " old BinlogFileNum:",LastDBBinlogFileNum," BinlogPosition:",db.binlogDumpPosition," GTID:",db.gtid, " new BinlogFileNum:",DBLastBinlogPositionFromDB.BinlogFileNum," BinlogPosition:",DBLastBinlogPositionFromDB.BinlogPosition," GITD:",DBLastBinlogPositionFromDB.GTID)
+				log.Println("recovery DBBinlog change:",dbInfo.Name, " old BinlogFileNum:",LastDBBinlogFileNum," BinlogPosition:",db.binlogDumpPosition," GTID:",db.gtid, " new BinlogFileNum:",DBLastBinlogPositionFromDB.BinlogFileNum," BinlogPosition:",DBLastBinlogPositionFromDB.BinlogPosition," GITD:",DBLastBinlogPositionFromDB.GTID)
 				DBBinlog = DBBinlog0
 			}
 		}
-		db.binlogDumpFileName = binlogPrefix+"."+fmt.Sprintf("%06d",LastDBBinlogFileNum)
-
 
 		//假如所有表数据同步都是正常的，则取 db 里的位点配置，否则取 同步表里最小位点
 		//假如有一个表的数据同步位点不正常,则取不正常位点的最小值,否则取和当前db最后保存的位 及表位点的最大值
 		if lastAllToServerNoraml == false {
-			// 这里要 判断 BinlogFileNum 是否 >0 , 是防止其他未知bug，造成数据错乱，造成的位点错误问题
-			if LastBinlog.BinlogFileNum > 0 {
-				db.binlogDumpFileName = binlogPrefix + "." + fmt.Sprintf("%06d", LastBinlog.BinlogFileNum)
-				db.binlogDumpPosition = LastBinlog.BinlogPosition
+			// 假如表同步的计算出来的最小位点都是有问题的, 则直接用 数据源记录的位点
+			if LastBinlog == nil || LastBinlog.BinlogFileNum <= 0 {
+				LastBinlog = DBBinlog
 			}
 		}else{
 			//这里为什么要取大值,是因为位点是定时刷盘的,有可能在哪些特殊情况下,表位点成功了,db位点没保存成功
@@ -450,17 +457,19 @@ func recoveryData(data map[string]dbSaveInfo,isStop bool){
 				log.Println("recovery binlog change5:",dbInfo.Name, " old BinlogFileNum:",LastBinlog.BinlogFileNum," BinlogPosition:",LastBinlog.BinlogPosition," GTID:",LastBinlog.GTID, " new BinlogFileNum:",DBBinlog.BinlogFileNum," BinlogPosition:",DBBinlog.BinlogPosition," GITD:",DBBinlog.GTID)
 				LastBinlog = LastBinlog0
 			}
-			db.binlogDumpFileName = binlogPrefix+"."+fmt.Sprintf("%06d",LastBinlog.BinlogFileNum)
 		}
+		db.binlogDumpFileName = binlogPrefix+"."+fmt.Sprintf("%06d",LastBinlog.BinlogFileNum)
 		if LastBinlog.GTID != "" {
 			db.gtid = LastBinlog.GTID
 		}
+		db.binlogDumpPosition = LastBinlog.BinlogPosition
 		db.lastEventID = LastBinlog.EventID
 
 		//如果是性能测试配置，强制修改位点
 		if PerformanceTestingFileName != ""{
 			db.binlogDumpFileName = PerformanceTestingFileName
 			db.binlogDumpPosition = PerformanceTestingPosition
+			db.gtid = PerformanceTestingGTID
 		}
 
 		if dbInfo.ConnStatus == CLOSING{

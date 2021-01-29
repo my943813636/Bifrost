@@ -1,3 +1,57 @@
+v1.7.0-rc.01   2021-01-24
+===========================
+1. gtid supported
+2. plugin ck ddl supported(add,change column)
+3. plugin ck decimal64 tansfer decimal64, decimal128 and decimal256 tansfer to String
+4. plugin mysql filter data auto_increment be first
+5. fix other bugs
+
+v1.6.6-release   2021-01-17
+===========================
+1. fix rename table binlog parser error bug
+2. fix http basic auth bug
+
+v1.6.5-release   2021-01-10
+===========================
+1. fixed mysql desc SchemaName error bug
+2. fixed mysql ddl tansfer error bug
+3. fixed history task may recovry bug
+4. fixed history flow href error
+5. mysql plugin error update
+6. fixed may  time out contine bug
+7. other bug fixed
+
+v1.6.4-release   2021-01-03
+===========================
+1. 修复一个全量任务设置多线程同步造成的致命bug
+2. fixed TRANSACTION_CONTEXT_EVENT,VIEW_CHANGE_EVENT,XA_PREPARE_LOG_EVENT filter error
+3. add mysql version show
+4. add http api doc
+5. web view update and other bugs fixed
+
+v1.6.3-release   2020-12-27
+===========================
+1. 修复plugin mysql 主键非自增的时候丢数据的bug
+2. 修复plugin ddl 同步造成的阻塞的bug
+3. 修复plugin 同步出错不报错而造成丢数据的bug
+4. 修复dateime(6)类型默认值为0000-00-00 00:00:00.000000解析出错的bug
+5. 流量统计优化减少对map的操作，界面流量显示优化
+6. 用户登入验证Host支持多个Host配置，用逗号隔开
+7. plugin clickhouse 优化对源是float类型的数据转换
+8. 其他已知的部分bug修复及界面优化
+
+v1.6.2-release   2020-12-20
+===========================
+1. 登入用户新增 Host 验证功能
+2. 新增登入日志及自动禁IP功能
+
+v1.6.1-release   2020-12-16
+===========================
+1. 新增对mysql time(1-6),datetime(1-6),timestamp(1-6) 的支持( binlog 解析由 @zhwei820 提交合并 )
+2. 修复一个可以可能 造成丢数据的bug
+3. mysql 插件支持不同步数据的功能，只支持 SQL DDL
+4. 修复 binlog commit事件被过滤的bug
+
 v1.6.0-release   2020-11-29
 ===========================
 1. http 框架代码结构变更,及可提供更为方便第三方自行开发管理界面系统

@@ -37,7 +37,7 @@ func (db *db) Callback(data *mysql.EventReslut) {
 		break
 	case mysql.XID_EVENT:
 		db.CallbackDoCommit(data)
-		break
+		return
 	default:
 		break
 	}
@@ -63,6 +63,7 @@ func (db *db) CallbackDoCommit(data *mysql.EventReslut) {
 				BinlogPosition: data.BinlogPosition,
 				Gtid:			data.Gtid,
 				Pri:			data.Pri,
+				ColumnMapping:  data.ColumnMapping,
 				EventID:		data.EventID,
 			}
 			db.Callback0(data0)

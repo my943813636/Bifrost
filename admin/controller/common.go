@@ -16,6 +16,7 @@ limitations under the License.
 package controller
 
 import (
+	"github.com/brokercap/Bifrost/server/user"
 	"strings"
 	"net/http"
 	"github.com/brokercap/Bifrost/admin/xgo"
@@ -46,7 +47,6 @@ func (c *CommonController) Prepare()  {
 	}else{
 		c.normalAuthor()
 		c.Data["Version"] = config.VERSION
-
 	}
 }
 
@@ -57,25 +57,17 @@ func (c *CommonController) basicAuthor() bool{
 		c.StopServeJSON()
 		return false
 	}
-	pwd := config.GetConfigVal("user",UserName)
-	if pwd == Password{
-		GroupName := config.GetConfigVal("groups",UserName)
-		if GroupName != "administrator" && c.checkWriteRequest(c.Ctx.Request.RequestURI){
-			c.SetJsonData(ResultDataStruct{Status:-1,Msg:"user group : [ "+GroupName+" ] no authority",Data:nil})
-			c.StopServeJSON()
-			return false
-		}
-		return true
-	}else{
-		c.SetJsonData(ResultDataStruct{Status:-1,Msg:"Password error",Data:nil})
+	_,err := user.CheckUserWithIP(UserName,Password,c.GetRemoteIp())
+	if err != nil {
+		c.SetJsonData(ResultDataStruct{Status:-1,Msg:err.Error(),Data:nil})
 		c.StopServeJSON()
+		return false
 	}
-	return false
+	return true
 }
 
 func (c *CommonController)  normalAuthor() bool{
 	var sessionID= c.Ctx.Session.CheckCookieValid(c.Ctx.ResponseWriter, c.Ctx.Request)
-
 	if sessionID != "" {
 		if _,ok:=c.Ctx.Session.GetSessionVal(sessionID,"UserName");ok{
 			//非administrator用户 用户，没有写操作权限
@@ -120,4 +112,15 @@ func (c *CommonController) AddPluginTemplate(tpl ...string)  {
 	for _,tplName := range tpl {
 		c.AddTemplate(PluginTemplatePath("/plugin/"+tplName))
 	}
+}
+
+func (c *CommonController) GetRemoteIp() string {
+	// 这里也可以通过X-Forwarded-For请求头的第一个值作为用户的ip
+	// 但是要注意的是这两个请求头代表的ip都有可能是伪造的
+	ip := c.Ctx.Request.Header.Get("X-Real-IP")
+	if ip == ""{
+		// 当请求头不存在即不存在代理时直接获取ip
+		ip = strings.Split(c.Ctx.Request.RemoteAddr, ":")[0]
+	}
+	return ip
 }
